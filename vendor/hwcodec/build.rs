@@ -99,8 +99,16 @@ mod ffmpeg {
     use super::*;
 
     pub fn build_ffmpeg(builder: &mut Build) {
+        let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap();
         ffmpeg_ffi();
-        link_vcpkg(builder, std::env::var("VCPKG_ROOT").unwrap().into());
+        
+        // Use system FFmpeg for RISC-V, VCPKG for other architectures
+        if target_arch == "riscv64gc" || target_arch == "riscv64" {
+            link_system_ffmpeg();
+        } else {
+            link_vcpkg(builder, std::env::var("VCPKG_ROOT").unwrap().into());
+        }
+        
         link_os();
         build_ffmpeg_ram(builder);
         #[cfg(feature = "vram")]
@@ -123,6 +131,8 @@ mod ffmpeg {
             target_arch = "loongarch64".to_owned();
         } else if target_arch == "aarch64" {
             target_arch = "arm64".to_owned();
+        } else if target_arch == "riscv64gc" || target_arch == "riscv64" {
+            target_arch = "riscv64".to_owned();
         } else {
             target_arch = "arm".to_owned();
         }
@@ -168,6 +178,19 @@ mod ffmpeg {
         println!("{}", format!("cargo:include={}", include.to_str().unwrap()));
         builder.include(&include);
         include
+    }
+
+    fn link_system_ffmpeg() {
+        // Use system FFmpeg libraries for RISC-V
+        println!("cargo:rustc-link-lib=avcodec");
+        println!("cargo:rustc-link-lib=avutil");
+        println!("cargo:rustc-link-lib=avformat");
+        
+        // Add system include paths for RISC-V
+        println!("cargo:rustc-link-search=native=/usr/lib/riscv64-linux-gnu");
+        println!("cargo:include=/usr/include/libavcodec");
+        println!("cargo:include=/usr/include/libavutil");
+        println!("cargo:include=/usr/include/libavformat");
     }
 
     fn link_os() {

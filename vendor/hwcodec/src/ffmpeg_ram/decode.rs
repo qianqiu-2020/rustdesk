@@ -59,7 +59,15 @@ pub struct Decoder {
     codec: *mut c_void,
     frames: *mut Vec<DecodeFrame>,
     pub ctx: DecodeContext,
+    instance_id: u64,  // Decoder instance ID, used to distinguish the state of different decoders
+    packet_cache: Option<Vec<u8>>,
+    decoder_initialized: bool,
+    last_sps: Option<Vec<u8>>,
+    last_pps: Option<Vec<u8>>,
+    last_vps: Option<Vec<u8>>,  // H265 specific
 }
+
+static mut DECODER_INSTANCE_COUNTER: u64 = 0;
 
 unsafe impl Send for Decoder {}
 unsafe impl Sync for Decoder {}
@@ -79,29 +87,231 @@ impl Decoder {
                 return Err(());
             }
 
+            DECODER_INSTANCE_COUNTER += 1;
+            let instance_id = DECODER_INSTANCE_COUNTER;
+
             Ok(Decoder {
                 codec,
                 frames: Box::into_raw(Box::new(Vec::<DecodeFrame>::new())),
                 ctx,
+                instance_id,
+                // Initialize instance state
+                packet_cache: None,
+                decoder_initialized: false,
+                last_sps: None,
+                last_pps: None,
+                last_vps: None,
             })
         }
     }
 
     pub fn decode(&mut self, packet: &[u8]) -> Result<&mut Vec<DecodeFrame>, i32> {
-        unsafe {
-            (&mut *self.frames).clear();
-            let ret = ffmpeg_ram_decode(
-                self.codec,
-                packet.as_ptr(),
-                packet.len() as c_int,
-                self.frames as *const _ as *const c_void,
-            );
+        use std::fs::OpenOptions;
+        use std::io::Write;
 
-            if ret < 0 {
-                Err(ret)
+        // Detect encoding format: determine whether it's H264 or H265 based on decoder name
+        let is_h265 = self.ctx.name.contains("hevc") || self.ctx.name.contains("h265");
+
+        // NALU analysis: support H264 and H265, determine if it's I-frame with SPS/PPS preceding it, and detect new SPS/PPS
+        let mut has_sps = false;
+        let mut has_pps = false;
+        let mut has_vps = false;  // H265 specific
+        let mut is_iframe = false;
+        let mut found_new_sps = false;
+        let mut found_new_pps = false;
+        let mut pos = 0;
+        
+        while pos + 4 < packet.len() {
+            let start_code = if &packet[pos..pos+3] == [0,0,1] { 3 } else if &packet[pos..pos+4] == [0,0,0,1] { 4 } else { 0 };
+            if start_code > 0 {
+                let nalu_header = packet[pos+start_code];
+                let nalu_start = pos + start_code;
+                // Find next NALU header
+                let mut nalu_end = nalu_start + 1;
+                while nalu_end + 4 < packet.len() {
+                    if &packet[nalu_end..nalu_end+3] == [0,0,1] || &packet[nalu_end..nalu_end+4] == [0,0,0,1] {
+                        break;
+                    }
+                    nalu_end += 1;
+                }
+                
+                if is_h265 {
+                    // H265 NALU type parsing (6 bits)
+                    let nalu_type = (nalu_header & 0x7E) >> 1;
+                    match nalu_type {
+                        32 => { // VPS (Video Parameter Set)
+                            has_vps = true;
+                            let vps = packet[nalu_start..nalu_end].to_vec();
+                            if self.last_vps.as_ref().map_or(true, |last| *last != vps) {
+                                self.last_vps = Some(vps);
+                            }
+                        },
+                        33 => { // SPS
+                            has_sps = true;
+                            let sps = packet[nalu_start..nalu_end].to_vec();
+                            if self.last_sps.as_ref().map_or(true, |last| *last != sps) {
+                                self.last_sps = Some(sps);
+                                found_new_sps = true;
+                            }
+                        },
+                        34 => { // PPS
+                            has_pps = true;
+                            let pps = packet[nalu_start..nalu_end].to_vec();
+                            if self.last_pps.as_ref().map_or(true, |last| *last != pps) {
+                                self.last_pps = Some(pps);
+                                found_new_pps = true;
+                            }
+                        },
+                        16..=23 => { // I-frame (IDR and CRA)
+                            is_iframe = true;
+                        },
+                        _ => {}
+                    }
+                } else {
+                    // H264 NALU type parsing (5 bits)
+                    let nalu_type = nalu_header & 0x1F;
+                    match nalu_type {
+                        7 => { // SPS
+                            has_sps = true;
+                            let sps = packet[nalu_start..nalu_end].to_vec();
+                            if self.last_sps.as_ref().map_or(true, |last| *last != sps) {
+                                self.last_sps = Some(sps);
+                                found_new_sps = true;
+                            }
+                        },
+                        8 => { // PPS
+                            has_pps = true;
+                            let pps = packet[nalu_start..nalu_end].to_vec();
+                            if self.last_pps.as_ref().map_or(true, |last| *last != pps) {
+                                self.last_pps = Some(pps);
+                                found_new_pps = true;
+                            }
+                        },
+                        5 => { // I-frame (IDR)
+                            is_iframe = true;
+                        },
+                        _ => {}
+                    }
+                }
+                pos = nalu_end;
             } else {
-                Ok(&mut *self.frames)
+                pos += 1;
             }
+        }
+
+        // Check if complete stream header exists based on encoding format
+        let has_complete_header = if is_h265 {
+            has_sps && has_pps  // H265 requires at least SPS+PPS, VPS is optional
+        } else {
+            has_sps && has_pps  // H264 requires SPS+PPS
+        };
+
+        unsafe {
+            // If decoder is already initialized, send all frames directly (including P/B frames)
+            if self.decoder_initialized {
+                (&mut *self.frames).clear();
+                let ret = ffmpeg_ram_decode(
+                    self.codec,
+                    packet.as_ptr(),
+                    packet.len() as c_int,
+                    self.frames as *const _ as *const c_void,
+                );
+                return if ret < 0 {
+                    Err(ret)
+                } else {
+                    Ok(&mut *self.frames)
+                };
+            }
+
+            // Logic when decoder is not initialized
+            let codec_type = if is_h265 { "H265" } else { "H264" };
+            
+            // Case 1: Encountered SPS/PPS but missing I-frame, cache it (for subsequent merging)
+            if (has_sps || has_pps || has_vps) && !is_iframe {
+                log::warn!("[{}#{}] cache packet: header without I-frame (vps={}, sps={}, pps={}, iframe={})", 
+                    codec_type, self.instance_id, has_vps, has_sps, has_pps, is_iframe);
+                match &mut self.packet_cache {
+                    Some(buf) => buf.extend_from_slice(packet),
+                    None => self.packet_cache = Some(packet.to_vec()),
+                }
+                return Ok(&mut *self.frames);
+            }
+
+            // Case 2: Encountered I-frame but missing complete header, try to merge with cached header info
+            if is_iframe && !has_complete_header {
+                log::warn!("[{}#{}] I-frame without complete header, trying to merge with cache (vps={}, sps={}, pps={}, iframe={})", 
+                    codec_type, self.instance_id, has_vps, has_sps, has_pps, is_iframe);
+                if let Some(ref cache) = self.packet_cache {
+                    let mut merged = cache.clone();
+                    merged.extend_from_slice(packet);
+                    (&mut *self.frames).clear();
+                    let ret = ffmpeg_ram_decode(
+                        self.codec,
+                        merged.as_ptr(),
+                        merged.len() as c_int,
+                        self.frames as *const _ as *const c_void,
+                    );
+                    self.packet_cache = None;
+                    if ret >= 0 {
+                        self.decoder_initialized = true;
+                        log::info!("[{}#{}] Decoder initialized successfully with merged header + I-frame", 
+                            codec_type, self.instance_id);
+                    }
+                    return if ret < 0 {
+                        Err(ret)
+                    } else {
+                        Ok(&mut *self.frames)
+                    };
+                } else {
+                    // No cache, send directly
+                    (&mut *self.frames).clear();
+                    let ret = ffmpeg_ram_decode(
+                        self.codec,
+                        packet.as_ptr(),
+                        packet.len() as c_int,
+                        self.frames as *const _ as *const c_void,
+                    );
+                    if ret >= 0 {
+                        self.decoder_initialized = true;
+                        log::info!("[{}#{}] Decoder initialized successfully with I-frame only", 
+                            codec_type, self.instance_id);
+                    }
+                    return if ret < 0 {
+                        Err(ret)
+                    } else {
+                        Ok(&mut *self.frames)
+                    };
+                }
+            }
+            
+            // Case 3: Complete header + I-frame are all present, send directly
+            if has_complete_header && is_iframe {
+                log::info!("[{}#{}] Complete header received, decoding (vps={}, sps={}, pps={}, iframe={})", 
+                    codec_type, self.instance_id, has_vps, has_sps, has_pps, is_iframe);
+                (&mut *self.frames).clear();
+                let ret = ffmpeg_ram_decode(
+                    self.codec,
+                    packet.as_ptr(),
+                    packet.len() as c_int,
+                    self.frames as *const _ as *const c_void,
+                );
+                self.packet_cache = None;
+                if ret >= 0 {
+                    self.decoder_initialized = true;
+                    log::info!("[{}#{}] Decoder initialized successfully with complete header", 
+                        codec_type, self.instance_id);
+                }
+                return if ret < 0 {
+                    Err(ret)
+                } else {
+                    Ok(&mut *self.frames)
+                };
+            }
+            
+            // Other cases (such as all missing), directly ignore
+            log::debug!("[{}#{}] ignoring packet: missing header/I-frame (vps={}, sps={}, pps={}, iframe={})", 
+                codec_type, self.instance_id, has_vps, has_sps, has_pps, is_iframe);
+            return Ok(&mut *self.frames);
         }
     }
 
