@@ -1,0 +1,74 @@
+[package]
+name = "mozjpeg-sys"
+description = "FFI bindings for MozJPEG v4.\n\nMozJPEG is automatically built and linked statically. Requires nasm and a C compiler."
+categories = [ "external-ffi-bindings", "multimedia::images" ]
+authors = ["Kornel <kornel@geekhood.net>"]
+include = ["/src/*.rs", "/vendor/*.c", "LICENSE", "/vendor/*.h", "/vendor/simd/**", "/Cargo.toml", "/README.md"]
+keywords = ["JPEG", "mozjpeg", "libjpeg", "static"]
+readme = "README.md"
+repository = "https://github.com/kornelski/mozjpeg-sys.git"
+homepage = "https://lib.rs/crates/mozjpeg-sys"
+documentation = "https://github.com/mozilla/mozjpeg#readme"
+license = "IJG AND Zlib AND BSD-3-Clause"
+build = "src/build.rs"
+links = "jpeg"
+version = "2.2.2"
+edition = "2021"
+rust-version = "1.71"
+
+[build-dependencies]
+dunce = "1.0.4"
+
+[build-dependencies.cc]
+version = "1.1"
+
+[build-dependencies.nasm-rs]
+optional = true
+version = ">=0.2.5, <0.4"
+
+[[example]]
+name = "reencode"
+path = "examples/reencode.rs"
+
+[dependencies]
+libc = "0.2.150"
+
+[features]
+# If compiling for non-Intel platforms and `nasm` causes you grief, disable default features and use `with_simd` instead.
+default = ["parallel", "unwinding", "nasm_simd"]
+# May compile native dependencies quicker
+parallel = ["cc/parallel", "nasm-rs?/parallel"]
+# Use SIMD-optimized assembly on ARM and other non-Intel platforms.
+with_simd = []
+# `nasm` is required for x86, but not ARM
+nasm_simd = ["with_simd", "dep:nasm-rs"]
+# Allow libjpeg error handlers to panic
+unwinding = []
+# Enable reading of JPEGs using arithmetic coding (these are rare)
+arith_dec = []
+# Enable creation of JPEGs using arithmetic coding (problematic compatibility)
+arith_enc = []
+# Helper functions for extracting/embedding ICC profiles
+icc_io = []
+# Enable alternative simpler C API
+turbojpeg_api = ["jpegtran"]
+# Include code for `jpegtran`
+jpegtran = []
+# Try to be binary-compatible with libjpeg v7 fork
+jpeg70_abi = ["arith_dec", "arith_enc"]
+# Try to be binary-compatible with libjpeg v8 fork
+jpeg80_abi = ["jpeg70_abi"]
+# Obsolete. Just use `nasm_simd,parallel`
+nasm_simd_parallel_build = ["nasm_simd", "parallel"]
+
+[lib]
+name = "mozjpeg_sys"
+crate-type = ["staticlib", "lib"]
+
+[dev-dependencies]
+cloudflare-soos = "2.3"
+arrayvec = "0.7.4"
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = ["--generate-link-to-definition"]
