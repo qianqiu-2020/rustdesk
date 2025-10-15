@@ -1602,17 +1602,27 @@ impl VideoHandler {
                 if res.as_ref().is_ok_and(|x| *x) {
                     self.fail_counter = 0;
                 } else {
-                    if self.fail_counter < usize::MAX {
-                        if self.first_frame && self.fail_counter < MAX_DECODE_FAIL_COUNTER {
-                            log::error!("decode first frame failed");
-                            self.fail_counter = MAX_DECODE_FAIL_COUNTER;
-                        } else {
-                            self.fail_counter += 1;
+                    match &res {
+                        Ok(false) => {
+                            log::debug!("video frame cached, waiting for complete header");
                         }
-                        log::error!(
-                            "Failed to handle video frame, fail counter: {}",
-                            self.fail_counter
-                        );
+                        Ok(true) => {
+                            self.fail_counter = 0;
+                        }
+                        Err(_) => {
+                            if self.fail_counter < usize::MAX {
+                                if self.first_frame && self.fail_counter < MAX_DECODE_FAIL_COUNTER {
+                                    log::error!("decode first frame failed");
+                                    self.fail_counter = MAX_DECODE_FAIL_COUNTER;
+                                } else {
+                                    self.fail_counter += 1;
+                                }
+                                log::error!(
+                                    "Failed to handle video frame, fail counter: {}",
+                                    self.fail_counter
+                                );
+                            }
+                        }
                     }
                 }
                 self.first_frame = false;
