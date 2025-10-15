@@ -107,6 +107,7 @@ fi
 
   curl -sSL --fail -o config.sub \
     'https://git.savannah.gnu.org/gitweb/?p=config.git;a=blob_plain;f=config.sub;hb=HEAD' &&
+    sed -i "s/| riscv64 \\\\/| riscv64 | riscv64gc \\\\/g" config.sub &&
     mv -f config.sub build-aux/config.sub
 
   echo "Done."

@@ -199,6 +199,7 @@ fn main() {
 
     let with_simd = cfg!(feature = "with_simd")
         && target_arch != "wasm32" // no WASM-SIMD support here
+        && target_arch != "riscv64"
         && if nasm_needed_for_arch { nasm_supported() } else { gas_supported(&c) };
 
     #[cfg(feature = "with_simd")]
