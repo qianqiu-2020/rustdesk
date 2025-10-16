@@ -85,8 +85,15 @@ lazy_static::lazy_static! {
 }
 
 lazy_static::lazy_static! {
-    // Is server process, with "--server" args
-    static ref IS_SERVER: bool = std::env::args().nth(1) == Some("--server".to_owned());
+    // Is server process, with "--server" or "-s" args
+    static ref IS_SERVER: bool = {
+        let args: Vec<String> = std::env::args().collect();
+        if args.len() > 1 {
+            args[1] == "--server" || args[1] == "-s"
+        } else {
+            false
+        }
+    };
     // Is server logic running. The server code can invoked to run by the main process if --server is not running.
     static ref SERVER_RUNNING: Arc<RwLock<bool>> = Default::default();
     static ref IS_MAIN: bool = std::env::args().nth(1).map_or(true, |arg| !arg.starts_with("--"));

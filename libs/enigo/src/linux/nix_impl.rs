@@ -131,7 +131,12 @@ impl Default for Enigo {
             },
             custom_keyboard: None,
             custom_mouse: None,
-            xdo: EnigoXdo::default(),
+            xdo: if is_x11 { 
+                EnigoXdo::default() 
+            } else { 
+                // Create dummy xdo for Wayland - won't be used
+                EnigoXdo::new_dummy() 
+            },
         }
     }
 }

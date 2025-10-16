@@ -513,6 +513,78 @@ pub fn check_zombie() {
     });
 }
 
+#[cfg(feature = "cli")]
+fn ensure_server_permissions() -> bool {
+    use hbb_common::log;
+    
+    #[cfg(target_os = "linux")]
+    {
+        // Always test actual screen capture permissions, even if we have a token
+        use scrap::{Capturer, Display};
+        if let Ok(d) = Display::primary() {
+            match Capturer::new(d) {
+                Ok(_) => {
+                    log::info!("Screen capture permission verified");
+                    // Close the session to ensure new restore token can be saved on next connection
+                    // This is important for Wayland systems to allow proper restore token management
+                    log::info!("Closing permission test session to allow restore token updates");
+                    scrap::wayland::pipewire::try_close_session();
+                    return true;
+                },
+                Err(e) => {
+                    // Check if we have a restore token that might be outdated
+                    let restore_token = hbb_common::config::LocalConfig::get_option("wayland-restore-token");
+                    if !restore_token.is_empty() {
+                        log::warn!("Screen capture failed despite having restore token (may be outdated): {}", e);
+                        // Clear the outdated token
+                        hbb_common::config::LocalConfig::set_option("wayland-restore-token".to_string(), "".to_string());
+                    } else {
+                        log::warn!("Screen capture not available: {}", e);
+                    }
+                    return false;
+                }
+            }
+        } else {
+            log::warn!("No display found");
+            return false;
+        }
+    }
+    
+    #[cfg(not(target_os = "linux"))]
+    {
+        log::info!("Permission check not implemented for this platform");
+        true
+    }
+}
+
+#[cfg(feature = "cli")]
+fn start_password_monitor() {
+    use std::sync::Arc;
+    use std::sync::Mutex;
+    use std::thread;
+    use std::time::Duration;
+    
+    let last_password = Arc::new(Mutex::new(hbb_common::password_security::temporary_password()));
+    
+    thread::spawn(move || {
+        loop {
+            thread::sleep(Duration::from_secs(1)); // Check every second
+            
+            let current_password = hbb_common::password_security::temporary_password();
+            let mut last_pwd = last_password.lock().unwrap();
+            
+            if current_password != *last_pwd {
+                if !current_password.is_empty() {
+                    log::info!("Temporary Password updated: {}", current_password);
+                } else {
+                    log::info!("Temporary Password cleared");
+                }
+                *last_pwd = current_password;
+            }
+        }
+    });
+}
+
 /// Start the host server that allows the remote peer to control the current machine.
 ///
 /// # Arguments
@@ -549,6 +621,27 @@ pub async fn start_server(is_server: bool, no_server: bool) {
         hbb_common::platform::windows::start_cpu_performance_monitor();
     });
 
+    log::info!("id={}", hbb_common::config::Config::get_id());
+
+    #[cfg(feature = "cli")]
+    if !ensure_server_permissions() {
+        log::error!("Failed to obtain required permissions for server mode.");
+        log::error!("Please grant screen recording and accessibility permissions manually.");
+        // std::process::exit(1);
+    }
+
+    // // Print connection information for CLI users
+    let temp_password = hbb_common::password_security::temporary_password();
+    if !temp_password.is_empty() {
+        log::info!("Temporary Password: {}", temp_password);
+    } else {
+        log::info!("Temporary Password is empty");
+    }
+    
+    // Start password change monitor for CLI
+    #[cfg(feature = "cli")]
+    start_password_monitor();
+        
     if is_server {
         crate::common::set_server_running(true);
         std::thread::spawn(move || {
@@ -563,8 +656,17 @@ pub async fn start_server(is_server: bool, no_server: bool) {
         });
         input_service::fix_key_down_timeout_loop();
         #[cfg(target_os = "linux")]
-        if input_service::wayland_use_uinput() {
-            allow_err!(input_service::setup_uinput(0, 1920, 0, 1080).await);
+        {
+            std::thread::spawn(crate::ipc::start_pa);
+            // Setup uinput in the user session to ensure proper ENIGO configuration
+            log::info!("Setting up uinput for user session");
+            tokio::spawn(async {
+                if let Err(e) = crate::input_service::setup_uinput(0, 1920, 0, 1080).await {
+                    log::error!("Failed to setup uinput in user session: {}", e);
+                } else {
+                    log::info!("uinput setup completed successfully in user session");
+                }
+            });
         }
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         tokio::spawn(async { sync_and_watch_config_dir().await });

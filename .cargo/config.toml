@@ -14,3 +14,10 @@ rustflags = [
 #]
 [net]
 git-fetch-with-cli = true
+
+[target.riscv64gc-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=mold", "-Z", "threads=8"]
+
+[target.riscv64gc-unknown-linux-gnu.build]
+rustc-wrapper = "sccache"

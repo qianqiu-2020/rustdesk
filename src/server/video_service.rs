@@ -108,28 +108,38 @@ impl VideoFrameController {
         }
     }
 
-    #[tokio::main(flavor = "current_thread")]
-    async fn try_wait_next(&mut self, fetched_conn_ids: &mut HashSet<i32>, timeout_millis: u64) {
+    fn try_wait_next(&mut self, fetched_conn_ids: &mut HashSet<i32>, timeout_millis: u64) {
         if self.send_conn_ids.is_empty() {
             return;
         }
 
+        // Use non-blocking try_recv to avoid async overhead
         let timeout_dur = Duration::from_millis(timeout_millis as u64);
-        match tokio::time::timeout(timeout_dur, FRAME_FETCHED_NOTIFIER.1.lock().await.recv()).await
-        {
-            Err(_) => {
-                // break if timeout
-                // log::error!("blocking wait frame receiving timeout {}", timeout_millis);
-            }
-            Ok(Some((id, instant))) => {
-                if let Some(tm) = instant {
-                    log::trace!("Channel recv latency: {}", tm.elapsed().as_secs_f32());
+        let start = Instant::now();
+        
+        // Use shorter polling interval to reduce overall wait time
+        while start.elapsed() < timeout_dur {
+            if let Ok(mut rx) = FRAME_FETCHED_NOTIFIER.1.try_lock() {
+                match rx.try_recv() {
+                    Ok((id, instant)) => {
+                        if let Some(tm) = instant {
+                            let latency_ms = tm.elapsed().as_secs_f64() * 1000.0;
+                            log::trace!("│      ⚡ Connection #{} ack: {:.2}ms latency", id, latency_ms);
+                        }
+                        fetched_conn_ids.insert(id);
+                        return; // Return immediately, do not continue waiting
+                    }
+                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                        // No message, continue waiting
+                    }
+                    Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                        // Channel closed, exit
+                    return;
+                    }
                 }
-                fetched_conn_ids.insert(id);
             }
-            Ok(None) => {
-                // this branch would never be reached
-            }
+            // Short sleep to avoid high CPU usage, but shorter than the original 300ms
+            std::thread::sleep(Duration::from_millis(3));
         }
     }
 }
@@ -774,6 +784,9 @@ fn run(vs: VideoService) -> ResultType<()> {
                         send_counter += 1;
                     }
                 }
+                // Sleep for one-tenth of frame duration to avoid high CPU usage when no frames are available
+                let one_frame = spf / 10;
+                std::thread::sleep(one_frame);
             }
             Err(err) => {
                 // This check may be redundant, but it is better to be safe.
@@ -799,13 +812,25 @@ fn run(vs: VideoService) -> ResultType<()> {
         }
 
         let mut fetched_conn_ids = HashSet::new();
-        let timeout_millis = 3_000u64;
+        // Significantly reduce timeout from 3000ms to 100ms, which is more reasonable for video streams
+        let timeout_millis = 100u64;
         let wait_begin = Instant::now();
+        let expected_conns = frame_controller.send_conn_ids.len();
+        log::debug!("│  ├─ ⏳ Waiting for {} connections (max {}ms)...", expected_conns, timeout_millis);
+        
+        // Reduce privacy mode check frequency to avoid checking every iteration
+        let mut privacy_check_counter = 0;
+        const PRIVACY_CHECK_INTERVAL: u32 = 10; // Check every 10 iterations
+        
         while wait_begin.elapsed().as_millis() < timeout_millis as _ {
-            if vs.source.is_monitor() {
+            // Only check privacy mode when necessary to reduce unnecessary overhead
+            if vs.source.is_monitor() && privacy_check_counter % PRIVACY_CHECK_INTERVAL == 0 {
                 check_privacy_mode_changed(&sp, display_idx, &c)?;
             }
-            frame_controller.try_wait_next(&mut fetched_conn_ids, 300);
+            privacy_check_counter += 1;
+            
+            // Use shorter single wait time
+            frame_controller.try_wait_next(&mut fetched_conn_ids, 5);
             // break if all connections have received current frame
             if fetched_conn_ids.len() >= frame_controller.send_conn_ids.len() {
                 break;

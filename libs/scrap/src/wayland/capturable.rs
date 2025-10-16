@@ -1,5 +1,6 @@
 use std::boxed::Box;
 use std::error::Error;
+use std::any::Any;
 
 pub enum PixelProvider<'a> {
     // 8 bits per color
@@ -25,6 +26,7 @@ impl<'a> PixelProvider<'a> {
 
 pub trait Recorder {
     fn capture(&mut self, timeout_ms: u64) -> Result<PixelProvider, Box<dyn Error>>;
+    fn as_any(&mut self) -> &mut dyn Any;
 }
 
 pub trait BoxCloneCapturable {

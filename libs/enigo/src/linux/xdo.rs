@@ -78,6 +78,16 @@ impl Default for EnigoXdo {
         }
     }
 }
+
+impl EnigoXdo {
+    /// Create a dummy EnigoXdo instance for Wayland (doesn't connect to X11)
+    pub fn new_dummy() -> Self {
+        Self {
+            xdo: ptr::null(),
+            delay: DEFAULT_DELAY,
+        }
+    }
+}
 impl EnigoXdo {
     /// Get the delay per keypress.
     /// Default value is 12000.

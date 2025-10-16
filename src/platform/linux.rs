@@ -255,7 +255,7 @@ pub fn get_cursor_data(hcursor: u64) -> ResultType<CursorData> {
     }
 }
 
-fn start_uinput_service() {
+pub fn start_uinput_service() {
     use crate::server::uinput::service;
     std::thread::spawn(|| {
         service::start_service_control();
@@ -345,6 +345,10 @@ fn try_start_server_(desktop: Option<&Desktop>) -> ResultType<Option<Child>> {
             }
             if !desktop.wl_display.is_empty() {
                 envs.push(("WAYLAND_DISPLAY", desktop.wl_display.clone()));
+            }
+            // Add Wayland session type if it's a Wayland session
+            if desktop.is_wayland() {
+                envs.push(("XDG_SESSION_TYPE", "wayland".to_string()));
             }
             if !desktop.home.is_empty() {
                 envs.push(("HOME", desktop.home.clone()));
@@ -498,6 +502,8 @@ pub fn start_os_service() {
     stop_rustdesk_servers();
     stop_subprocess();
     start_uinput_service();
+    // Give uinput services time to start up using std::thread::sleep instead of tokio sleep
+    std::thread::sleep(std::time::Duration::from_millis(1000));
 
     std::thread::spawn(|| {
         allow_err!(crate::ipc::start(crate::POSTFIX_SERVICE));
@@ -771,7 +777,21 @@ where
         bail!("No valid uid");
     }
     let xdg = &format!("XDG_RUNTIME_DIR=/run/user/{}", uid) as &str;
-    let mut args = vec![xdg, "-u", &username, cmd.to_str().unwrap_or("")];
+    let dbus = &format!("DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{}/bus", uid) as &str;
+    
+    // Add Wayland environment variables if they exist
+    let mut wayland_vars = Vec::new();
+    if let Ok(session_type) = std::env::var("XDG_SESSION_TYPE") {
+        if session_type == "wayland" {
+            wayland_vars.push(format!("XDG_SESSION_TYPE={}", session_type));
+        }
+    }
+    let mut args = vec![xdg, dbus];
+    // Add Wayland environment variables to sudo command
+    let wayland_str_refs: Vec<&str> = wayland_vars.iter().map(|s| s.as_str()).collect();
+    args.extend_from_slice(&wayland_str_refs);
+    
+    args.extend_from_slice(&["-u", &username, cmd.to_str().unwrap_or("")]);
     args.append(&mut arg.clone());
     // -E is required to preserve env
     args.insert(0, "-E");

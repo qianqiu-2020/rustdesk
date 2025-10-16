@@ -22,7 +22,7 @@ path = "src/service.rs"
 
 [features]
 inline = []
-cli = []
+cli = ["hwcodec", "linux-pkg-config"]
 use_samplerate = ["samplerate"]
 use_rubato = ["rubato"]
 use_dasp = ["dasp"]
