@@ -318,19 +318,12 @@ show_help() {
     echo "Options:"
     echo "  -h, --help     Show this help information"
     echo "  -v, --version  Specify version number (default: $VERSION)"
-    echo "  -a, --arch     Specify architecture (default: $DEB_ARCH)"
     echo "  -m, --mode     Specify build mode (debug|release, default: $BUILD_MODE)"
     echo ""
-    echo "Environment variables:"
-    echo "  BUILD_MODE     Set build mode (debug, release)"
-    echo "  DEB_ARCH       Set target architecture (amd64, arm64, armhf, riscv64)"
-    echo ""
     echo "Examples:"
-    echo "  $0                          # Use default settings to build (debug mode))"
+    echo "  $0                          # Use default settings to build (debug mode)"
     echo "  $0 -m release               # Build release version"
-    echo "  $0 -v 1.4.3 -m release     # Specify version and release mode"
-    echo "  $0 -a arm64 -m release      # Specify architecture and release mode"
-    echo "  BUILD_MODE=release $0       # Specify release mode through environment variable"
+    echo "  $0 -v 1.4.3 -m release      # Specify version and release mode"
 }
 
 # Parse command line arguments
