@@ -102,7 +102,7 @@ Device: SpacemiT K1 board
 
 **Download**:
 
-[Download Custom Client](https://github.com/qianqiu-2020/rustdesk/releases/download/1.4.2/rustdesk-1.4.2-x86_64.exe), which add support for decoding H.264/H.265 streams from K1 device.
+[Download Custom Client](https://github.com/qianqiu-2020/rustdesk/releases/download/1.4.2-1/rustdesk-1.4.2-x86_64.exe), which add support for decoding H.264/H.265 streams from K1 device.
 
 **Configuration**:
 
