@@ -20,7 +20,7 @@
 #include <new>
 
 #include "common/webmids.h"
-
+#include <cstdint>
 namespace mkvparser {
 const long long kStringElementSizeLimit = 20 * 1000 * 1000;
 const float MasteringMetadata::kValueNotPresent = FLT_MAX;
