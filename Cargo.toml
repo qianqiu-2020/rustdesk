@@ -240,3 +240,5 @@ libsodium-sys = { path = "vendor/libsodium-sys" }
 mozjpeg-sys = { path = "vendor/mozjpeg-sys"}
 [patch."https://github.com/rustdesk-org/hwcodec"]
 hwcodec = { path = "vendor/hwcodec" }
+[patch."https://github.com/rustdesk-org/rust-webm"]
+webm-sys = { path="vendor/webm-sys"}
